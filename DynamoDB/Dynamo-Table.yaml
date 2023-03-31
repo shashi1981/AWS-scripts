@@ -1,0 +1,134 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: >-
+  AWS CloudFormation Template DynamoDB_Table: This template demonstrates the
+  creation of a DynamoDB table.
+Parameters:
+  MonOwner:
+    Description: Owner associated with table creation
+    Type: String
+    AllowedValues:
+      - DSIT MLOPS
+      - OTHER
+  MonDataClassification:
+    Description: Data Classification categorization
+    Type: String
+    AllowedPattern: '[a-zA-Z0-9]*'
+    AllowedValues:
+      - secret
+      - restricted
+      - public
+      - internal
+  MonProject:
+    Description: Project Associated with table
+    Type: String
+    AllowedValues:
+      - Connected Pipeline
+      - Gwas
+      - Gws
+  MonRegulated:
+    Description: Regulated Data associated with table
+    Type: String
+    AllowedValues:
+      - 'no'
+      - gxp
+      - sox
+      - none
+  MonEnv:
+    Description: Environment associated with table
+    Type: String
+    AllowedValues:
+      - non-prod
+      - prod
+      - discovery
+  ReadCapacityUnits:
+    Description: Provisioned read throughput
+    Type: Number
+    Default: '100'
+    MinValue: '5'
+    MaxValue: '10000'
+    ConstraintDescription: must be between 5 and 10000
+  WriteCapacityUnits:
+    Description: Provisioned write throughput
+    Type: Number
+    Default: '100'
+    MinValue: '5'
+    MaxValue: '10000'
+    ConstraintDescription: must be between 5 and 10000
+Resources:
+  connectedBreedingPipelineParentPayload:
+    Type: 'AWS::DynamoDB::Table'
+    Properties:
+      AttributeDefinitions:
+        - AttributeName: "uuid"
+          AttributeType: "S"
+        - AttributeName: "start_time"
+          AttributeType: "N"
+      KeySchema:
+        - AttributeName: "uuid"
+          KeyType: "HASH"
+        - AttributeName: "start_time"
+          KeyType: "RANGE"
+      ProvisionedThroughput:
+        ReadCapacityUnits: !Ref ReadCapacityUnits
+        WriteCapacityUnits: !Ref WriteCapacityUnits
+      TableName: "bay_breeding_connected_pipeline_parent_payload"
+      Tags:
+        -
+          Key: mon:project
+          Value: !Ref MonProject
+        -
+          Key: mon:env
+          Value: !Ref MonEnv
+        -
+          Key: mon:data-classification
+          Value: !Ref MonDataClassification
+        -
+          Key: mon:regulated
+          Value: !Ref MonRegulated
+        -
+          Key: mon:owner
+          Value: !Ref MonOwner
+  connectedBreedingPipelineChildPayload:
+    Type: 'AWS::DynamoDB::Table'
+    Properties:
+      AttributeDefinitions:
+        - AttributeName: "uuid"
+          AttributeType: "S"
+        - AttributeName: "start_time"
+          AttributeType: "N"
+      KeySchema:
+        - AttributeName: "uuid"
+          KeyType: "HASH"
+        - AttributeName: "start_time"
+          KeyType: "RANGE"
+      ProvisionedThroughput:
+        ReadCapacityUnits: !Ref ReadCapacityUnits
+        WriteCapacityUnits: !Ref WriteCapacityUnits
+      TableName: "bay_breeding_connected_pipeline_child_tasks"
+      Tags:
+        -
+          Key: project
+          Value: !Ref MonProject
+        -
+          Key: env
+          Value: !Ref MonEnv
+        -
+          Key: data-classification
+          Value: !Ref MonDataClassification
+        -
+          Key: regulated
+          Value: !Ref MonRegulated
+        -
+          Key: owner
+          Value: !Ref MonOwner
+Outputs:
+  TableName:
+      Value: !Ref connectedBreedingPipelineParentPayload
+      Description: >-
+        This table stores the payload for an EVA run in breeding connected
+        pipeline
+  TableName:
+      Value: !Ref connectedBreedingPipelineChildPayload
+      Description: >-
+        This table stores the payload for each task for a given EVA run in
+        breeding connected pipeline
