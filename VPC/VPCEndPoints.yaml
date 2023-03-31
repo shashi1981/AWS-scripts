@@ -1,0 +1,73 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: >-
+  AWS CloudFormation Template for vpc endpoint creation: This template deBaystrates the
+  creation of a vpc endpoints.
+Parameters:
+  BayOwner:
+    Description: Owner associated with vpc endpoints creation
+    Type: String
+    AllowedValues:
+      -  MLOPS
+      - 
+      - OTHER
+  BayDataClassification:
+    Description: Data Classification categorization
+    Type: String
+    AllowedPattern: '[a-zA-Z0-9]*'
+    AllowedValues:
+      - secret
+      - restricted
+      - public
+      - internal
+  BayProject:
+    Description: Project Associated with vpc endpoints
+    Type: String
+    AllowedValues:
+      - Connected Pipeline
+      - Gwas
+      - Gws
+  BayRegulated:
+    Description: Regulated Data associated with vpc endpoints
+    Type: String
+    AllowedValues:
+      - 'no'
+      - gxp
+      - sox
+      - none
+  BayEnv:
+    Description: Environment associated with vpc endpoints
+    Type: String
+    AllowedValues:
+      - non-prod
+      - prod
+      - discovery
+  ParentVPCStack:
+    Description: 'Stack name of parent VPC stack based on vpc/vpc-*azs.yaml template.'
+    Type: String
+  VpcEndpointService:
+    Description: 'Service Name for VpcEndpoint'
+    Type: String
+    AllowedValues:
+      - s3
+      - dynamodb
+      - api
+      - ec2
+  Resources:
+    VpcEndpoint:
+      Type: 'AWS::EC2::VPCEndpoint'
+      Properties:
+        RouteTableIds: !Split [',', !Join [',', [{'Fn::ImportValue': !Sub '${ParentVPCStack}-PrivateRouteTable1'}, {'Fn::ImportValue': !Sub '${ParentVPCStack}-PrivateRouteTable2'}]]]
+        ServiceName: !Sub 'com.amazonaws.${AWS::Region}.${VpcEndpointService}'
+        VpcId: {'Fn::ImportValue': !Sub '${ParentVPCStack}-VPC'}
+  Outputs:
+    TemplateVersion:
+      Description: ' template version.'
+      Value: '__VERSION__'
+    StackName:
+      Description: 'Stack name.'
+      Value: !Sub '${AWS::StackName}'
+    VpcEndpoint:
+      Description: 'The VPC endpoint to DynamoDB.'
+      Value: !Ref VpcEndpoint
+      Export:
+        Name: !Sub '${AWS::StackName}-VpcEndpoint'
