@@ -1,0 +1,810 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Template creates a Airflow Webserver Ec2, Airflow - 2xSG, Airflow ELB.
+Parameters:
+  AirflowUser:
+    NoEcho: "false"
+    Description: Airflow UI admin account username
+    Type: String
+    MinLength: "4"
+    MaxLength: "41"
+    AllowedPattern: "[a-zA-Z0-9]*"
+    ConstraintDescription: Must contain only alphanumeric characters
+  AirflowPassword:
+    NoEcho: "false"
+    Description: Airflow UI admin account password
+    Type: String
+    MinLength: "8"
+    MaxLength: "41"
+    AllowedPattern: "[a-zA-Z0-9]*"
+    ConstraintDescription: Must contain only alphanumeric characters
+  DBPassword:
+    NoEcho: "true"
+    Description: Airflow database admin account password
+    Type: String
+    MinLength: "8"
+    MaxLength: "41"
+    AllowedPattern: "[a-zA-Z0-9]*"
+    ConstraintDescription: Must contain only alphanumeric characters
+  DBName:
+    Description: Database Name for Airflow DB
+    Type: String
+    ConstraintDescription: Must contain details for DB Host
+  DBUser:
+    Description: Database User for Airflow DB
+    Type: String
+    ConstraintDescription: Must contain details for DB User
+  DBPort:
+    Description: Database Port for Airflow DB
+    Type: String
+    ConstraintDescription: Must contain details for DB Port
+  DBInstanceClass:
+    Description: Database Size for Airflow DB
+    Type: String
+    ConstraintDescription: DB Instance Size for Airflow metadata DBInstance
+    AllowedValues:
+      - db.t3.small
+      - db.t3.medium
+      - db.t3.large
+      - db.t3.xlarge
+      - db.t4g.xlarge
+      - db.t4g.large
+      - db.t4g.medium
+      - db.t4g.small
+  InstanceTypeParameter:
+    Description: EC2 Instance Type to used with Airflow Webserver Installation
+    Type: String
+    Default: t3.micro
+    AllowedValues:
+      - t3.micro
+      - t3.small
+      - t3.medium
+      - t3.large
+      - t3.2xlarge
+      - t3.4xlarge
+    ConstraintDescription: EC2 Instance Type
+  VpcId:
+    Description: 'The VPC used for deploying the airflow webserver'
+    Type: AWS::EC2::VPC::Id
+    ConstraintDescription: Provide VPC ID to be used in airflow Webserver Installation
+  PublicSubnetIdA:
+    Description: The public subnet for ALB
+    Type: AWS::EC2::Subnet::Id
+    ConstraintDescription: Provide Public Subnet ID to be used for ALB
+  PublicSubnetIdB:
+    Description: The public subnet for ALB
+    Type: AWS::EC2::Subnet::Id
+    ConstraintDescription: Provide Public Subnet ID to be used for ALB
+  PrivateSubnetIdA:
+    Description: The private subnet for airflow Webserver Installation
+    Type: AWS::EC2::Subnet::Id
+    ConstraintDescription: Provide Private Subnet ID to be used in airflow Webserver Installation
+  PrivateSubnetIdB:
+    Description: The private subnet for airflow Webserver Installation
+    Type: AWS::EC2::Subnet::Id
+    ConstraintDescription: Provide Private Subnet ID to be used in airflow Webserver Installation
+  Ec2Ips:
+    Description: >-
+       CIDR ips for Airflow server communication across account.It
+      accpets only 3(min and max) comma seperated values.
+    Type: CommaDelimitedList
+    ConstraintDescription: er provided Ip's to restrict er.com
+  ImageID:
+    Description: Image is used to launch Airflow server current image is Ubuntu-v20.04
+    Type: String
+    Default: ami-0acea9cb2273d9ce9
+    ConstraintDescription: Must contain only alphanumeric characters and must start with ami-
+  ELbIps:
+    Description:  CIDR to all external traffic in  network.
+    Type: String
+    ConstraintDescription: Must contain only numeric seperated by comma
+  BastionIP:
+    Description:  CIDR to all external traffic in  network.
+    Type: String
+    ConstraintDescription: Must contain valid Bastion IP for ssh access
+  OcelotIps:
+    Description:  CIDR to all external traffic in  network.
+    Type: CommaDelimitedList
+    ConstraintDescription: Must contain only numeric seperated by comma
+  KeyName:
+    Description: The EC2 Key Pair to allow SSH access to the instance
+    Type: AWS::EC2::KeyPair::KeyName
+  OwnerName:
+    Type: String
+    Default: --APD-MLOPS
+    Description: Enter Velocity group name
+  POCName:
+    Type: String
+    Description: Enter POC name
+  ProjectName:
+    Type: String
+    Default: Airflow2.0 Upgrade
+    Description: Enter your Project Name
+  Environment:
+    Type: String
+    Default: discovery
+    AllowedValues:
+      - dev
+      - discovery
+      - np
+      - prod
+    Description: Enter np, prod and discovery. Default is discovery.
+  Regulated:
+    Type: String
+    Default: 'no'
+    AllowedValues:
+      - 'no'
+      - 'yes'
+  DataClassification:
+    Type: String
+    Default: restricted
+    AllowedValues:
+      - restricted
+      - internal
+      - secret
+  VPCStackName:
+    Description: The VPC stack name in CloudFormation
+    Type: String
+  ALBExistingCertArn:
+    Type: 'String'
+    Default: 'arn:aws:acm:<my-region>:<my-account>:certificate/********-****-****-****-********'
+  Airflow2InstanceProfile:
+    Type: String
+    AllowedValues:
+      - discovery-airflow-role
+      - discovery-airflow-profile
+      - test-airflow-profile
+      - prod-airflow-profile
+  PerformanceMode: 
+    AllowedValues: 
+      - generalPurpose
+      - maxIO
+    Default: generalPurpose
+    Type: String
+Resources:
+  AirflowEc2Instance:
+    Type: AWS::EC2::Instance
+    CreationPolicy:
+      ResourceSignal:
+        Timeout: PT10M
+    Properties:
+      SecurityGroupIds:
+        - !GetAtt "AirflowEC2SecurityGroup.GroupId"
+      ImageId:
+        Ref: ImageID
+      InstanceType:
+        Ref: InstanceTypeParameter
+      IamInstanceProfile:
+        Ref: Airflow2InstanceProfile
+      BlockDeviceMappings:
+        - DeviceName: /dev/sda1
+          Ebs:
+            VolumeSize: 100
+      KeyName:
+        Ref: KeyName
+      SubnetId:
+        Ref: PrivateSubnetIdA
+      UserData:
+        Fn::Base64: !Sub |
+            #!/bin/bash
+            set -x
+            exec > >(tee /var/log/user-data.log|logger -t user-data ) 2>&1
+            ln -s /root/user-data.log /var/log/user-data.log
+            #EFS Mount Utilities
+            sudo apt-get -y install nfs-common
+            export LC_CTYPE=en_US.UTF-8
+            export LC_ALL=en_US.UTF-8
+            DIR_TGT=/efs/airflow
+            EC2_REGION=${AWS::Region}
+            mkdir -p $DIR_TGT
+            DIR_SRC=${EFSFileSystem}.efs.$EC2_REGION.amazonaws.com
+            mount -t nfs4 -o nfsvers=4.1,rsize=1048576,wsize=1048576,hard,timeo=600,retrans=2 $DIR_SRC:/ $DIR_TGT
+            #Install CloudFormation Helper tools
+            sudo apt-get -y install python3-setuptools python-setuptools
+            # Start cfn-init
+            pip3 install wget https://s3.amazonaws.com/cloudformation-examples/aws-cfn-bootstrap-py3-latest.tar.gz
+            /usr/local/bin/cfn-init -v -c install --stack ${AWS::StackId} --resource AirflowEc2Instance --region ${AWS::Region}
+            #Create Airflow User and associate to Group
+            #mkdir -p /opt/airflow/
+            groupadd airflow
+            #useradd -m -d /opt/airflow -g airflow -G root airflow
+            useradd -m -d $DIR_TGT -g airflow -G root airflow
+            #Install Dependency packages:
+            sudo apt-get update
+            sudo apt-get install -y build-essential libssl-dev libffi-dev python3-dev python3-pip
+            sudo apt-get -y install mysql-server default-libmysqlclient-dev postgresql-client libpq-dev
+            pip3 install typing_extensions
+            pip3 install psycopg2
+            # Install airflow using pip
+            echo "Installing Apache Airflow"
+            export AIRFLOW_GPL_UNIDECODE=yes
+            pip3 install apache-airflow[ssh,mysql]==2.2.3
+            pip3 install apache-airflow-providers-amazon
+            pip3 install hvac
+            pip3 install sagemaker==2.25.2
+            pip3 install Markupsafe==2.0.1
+            #export AIRFLOW_HOME=/opt/airflow
+            export AIRFLOW_HOME=/efs/airflow
+            sudo -E airflow db init
+            # Create Fernet Key
+            export FERNET_KEY=`openssl rand -base64 32`
+            #sed -i 's|fernet_key =|fernet_key = '$FERNET'|g' /opt/airflow/airflow.cfg
+            sed -i 's|fernet_key =|fernet_key = '$FERNET'|g' /efs/airflow/airflow.cfg
+            # Postgres operators and hook, support as an Airflow backend
+            #echo 'export PATH=/usr/local/bin:~/.local/bin:/opt/airflow:$PATH' >> ~/.bash_profile
+            echo 'export PATH=/usr/local/bin:~/.local/bin:/efs/airflow:$PATH' >> ~/.bash_profile
+            source ~/.bash_profile
+            # Initialize Airflow
+            # Update the RDS connection in the Airflow Config file
+            #sed -i '/sql_alchemy_conn/s/^/#/g' /opt/airflow/airflow.cfg
+            sed -i '/sql_alchemy_conn/s/^/#/g' /efs/airflow/airflow.cfg
+            #sed -i '/#sql_alchemy_conn/ a sql_alchemy_conn = postgresql://airflow:${DBPassword}@${DBInstance.Endpoint.Address}:${DBInstance.Endpoint.Port}/airflowdb' /opt/airflow/airflow.cfg
+            sed -i '/#sql_alchemy_conn/ a sql_alchemy_conn = postgresql://airflow:${DBPassword}@${DBInstance.Endpoint.Address}:${DBInstance.Endpoint.Port}/airflowdb' /efs/airflow/airflow.cfg
+            # Update the type of executor in the Airflow Config file
+            #sed -i '/executor = SequentialExecutor/s/^/#/g' /opt/airflow/airflow.cfg
+            sed -i '/executor = SequentialExecutor/s/^/#/g' /efs/airflow/airflow.cfg
+            #sed -i '/executor = SequentialExecutor/ a executor = LocalExecutor' /opt/airflow/airflow.cfg
+            sed -i '/executor = SequentialExecutor/ a executor = LocalExecutor' /efs/airflow/airflow.cfg
+            #sed -i 's/load_examples = True/load_examples = False/g' /opt/airflow/airflow.cfg
+            sed -i 's/load_examples = True/load_examples = False/g' /efs/airflow/airflow.cfg
+            airflow db init
+            airflow users create -e shashidharreddy.depa@er.com -f admin -l airflow -p ${AirflowPassword} -r Admin -u ${AirflowUser}
+            #Change Ownership to Airflow user 
+            #chown airflow:airflow /opt/airflow -R
+            chown airflow:airflow /efs/airflow -R
+            #chmod 775 /opt/airflow -R
+            chmod 775 /efs/airflow -R
+            #Install Airflow as Systemd services
+            wget https://raw.githubusercontent.com/apache/airflow/master/scripts/systemd/airflow
+            wget https://raw.githubusercontent.com/apache/airflow/master/scripts/systemd/airflow.conf
+            wget https://raw.githubusercontent.com/apache/airflow/master/scripts/systemd/airflow-webserver.service
+            wget https://raw.githubusercontent.com/apache/airflow/master/scripts/systemd/airflow-scheduler.service
+            which airflow
+            #echo 'AIRFLOW_CONFIG=/opt/airflow/airflow.cfg' >> airflow
+            echo 'AIRFLOW_CONFIG=/efs/airflow/airflow.cfg' >> airflow
+            #echo 'AIRFLOW_HOME=/opt/airflow' >> airflow
+            echo 'AIRFLOW_HOME=/efs/airflow' >> airflow
+            #echo 'AIRFLOW_HOME=/opt/airflow' >> /etc/environment
+            echo 'AIRFLOW_HOME=/efs/airflow' >> /etc/environment
+            sed -i 's,'/bin','/usr/local/bin',g' airflow-webserver.service
+            sed -i 's,'/bin','/usr/local/bin',g' airflow-scheduler.service
+            #Copy Systemd Files to appropriate locations.. create directories if they do not exist
+            sudo mkdir -p /usr/lib/systemd/system/
+            sudo mkdir -p /usr/lib/tmpfiles.d/
+            sudo mkdir -p /etc/sysconfig/
+            sudo mkdir /run/airflow
+            sudo chown airflow:airflow /run/airflow
+            sudo chmod 755 /run/airflow -R
+            sudo cp *.service /usr/lib/systemd/system/
+            sudo cp airflow.conf /usr/lib/tmpfiles.d/
+            sudo cp airflow /etc/sysconfig/
+            #Enable Airflow systemd Services
+            sudo systemctl enable airflow-scheduler.service
+            sudo systemctl enable airflow-webserver.service
+            # Run Airflow webserver and scheduler            
+            sudo systemctl start airflow-scheduler.service
+            sudo systemctl start airflow-webserver.service
+            # Run second scheduler
+            #nohup airflow scheduler --skip-serve-logs >> /var/log/airflow/airflow-scheduler-2.log &
+            airflow dags list
+            # Start cfn-signal
+            pip3 install wget https://s3.amazonaws.com/cloudformation-examples/aws-cfn-bootstrap-py3-latest.tar.gz
+            /usr/local/bin/cfn-signal --exit-code 0 --resource AirflowEc2Instance --region ${AWS::Region} --stack ${AWS::StackName}
+      Tags:
+        - Key: Name
+          Value:
+            Fn::Join:
+              - '-'
+              - - 
+                - 
+                - Ref: Environment
+                - Airflow2-server
+        - Key: :owner
+          Value:
+            Ref: OwnerName
+        - Key: :project
+          Value:
+            Ref: ProjectName
+        - Key: :poc
+          Value:
+            Ref: POCName
+        - Key: :env
+          Value:
+            Ref: Environment
+        - Key: :regulated
+          Value:
+            Ref: Regulated
+        - Key: :data-classification
+          Value:
+            Ref: DataClassification
+    Metadata:
+      AWS::CloudFormation::Init:
+        configSets:
+          install:
+            - installpackages
+        installpackages:
+          packages:
+            yum:
+              python3: []
+              python3-dev: []
+              gcc: []
+              gcc-c++: []
+              gcc-devel: []
+              openssl-dev: []
+              git: []
+
+    DependsOn:
+      - DBInstance
+      - AirflowEC2SecurityGroup
+      - EfsSecurityGroup
+  'DatabaseSubnetGroup':
+    'Type': 'AWS::RDS::DBSubnetGroup'
+    'Properties':
+      'DBSubnetGroupDescription': 'Database subnet group'
+      'SubnetIds':
+      - 'Fn::ImportValue':
+          'Fn::Sub': '${VPCStackName}-PrivateSubnet1'
+      - 'Fn::ImportValue':
+          'Fn::Sub': '${VPCStackName}-PrivateSubnet2'
+  DBInstance:
+    Type: AWS::RDS::DBInstance
+    DeletionPolicy: Delete
+    Properties:
+      DBInstanceIdentifier: !Ref DBName
+      DBName: airflowdb
+      Engine: postgres
+      MasterUsername: !Ref DBUser
+      MasterUserPassword: !Ref "DBPassword"
+      DBInstanceClass: !Ref DBInstanceClass
+      DBSubnetGroupName: !Ref "DatabaseSubnetGroup"
+      AllocatedStorage: 5
+      DBSecurityGroups:
+        - Ref: DBSecurityGroup
+      Tags:
+        - Key: Name
+          Value:
+            Fn::Join:
+              - '-'
+              - - 
+                - 
+                - Ref: Environment
+                - airflow-server
+        - Key: :owner
+          Value:
+            Ref: OwnerName
+        - Key: :project
+          Value:
+            Ref: ProjectName
+        - Key: :poc
+          Value:
+            Ref: POCName
+        - Key: :env
+          Value:
+            Ref: Environment
+        - Key: :regulated
+          Value:
+            Ref: Regulated
+        - Key: :data-classification
+          Value:
+            Ref: DataClassification
+  EFSFileSystem:
+    Type: AWS::EFS::FileSystem
+    Properties:
+      Encrypted: true
+      FileSystemTags:
+        - Key: Name
+          Value:
+            Fn::Join:
+              - '-'
+              - - 
+                - 
+                - Ref: Environment
+                - efs
+        - Key: :owner
+          Value:
+            Ref: OwnerName
+        - Key: :project
+          Value:
+            Ref: ProjectName
+        - Key: :poc
+          Value:
+            Ref: POCName
+        - Key: :env
+          Value:
+            Ref: Environment
+        - Key: :regulated
+          Value:
+            Ref: Regulated
+        - Key: :data-classification
+          Value:
+            Ref: DataClassification
+      PerformanceMode: !Ref PerformanceMode
+  MountTarget1:
+    Type: AWS::EFS::MountTarget
+    DependsOn:
+    - EFSFileSystem
+    - EfsSecurityGroup
+    Properties:
+      FileSystemId: !Ref EFSFileSystem
+      SubnetId: !Ref PrivateSubnetIdA
+      SecurityGroups:
+      - !Ref EfsSecurityGroup
+  MountTarget2:
+    Type: AWS::EFS::MountTarget
+    DependsOn:
+    - EFSFileSystem
+    - EfsSecurityGroup
+    Properties:
+      FileSystemId: !Ref EFSFileSystem
+      SubnetId: !Ref PrivateSubnetIdB
+      SecurityGroups:
+      - !Ref EfsSecurityGroup
+  AirflowEC2SecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Enable HTTP access via port 8080
+      GroupName: !Sub 'AirflowEC2SG-${AWS::StackName}'
+      VpcId:
+        Ref: VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 8080
+          ToPort: 8080
+          SourceSecurityGroupId:
+            Fn::GetAtt:
+              - ALBSecurityGroup
+              - GroupId
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 
+            Ref: BastionIP
+      Tags:
+        - Key: Name
+          Value:
+            Fn::Join:
+              - '-'
+              - - 
+                - 
+                - Ref: Environment
+                - airflow2-server
+        - Key: :owner
+          Value:
+            Ref: OwnerName
+        - Key: :project
+          Value:
+            Ref: ProjectName
+        - Key: :poc
+          Value:
+            Ref: POCName
+        - Key: :env
+          Value:
+            Ref: Environment
+        - Key: :regulated
+          Value:
+            Ref: Regulated
+        - Key: :data-classification
+          Value:
+            Ref: DataClassification
+  ALBSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Enable ports 80
+      VpcId:
+        Ref: VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: '80'
+          ToPort: '80'
+          CidrIp:
+            Ref: ELbIps
+        - IpProtocol: tcp
+          FromPort: '443'
+          ToPort: '443'
+          CidrIp:
+            Ref: ELbIps
+        - IpProtocol: '-1'
+          FromPort: '-1'
+          ToPort: '-1'
+          CidrIp:
+            Fn::Select: [ 0, Ref: OcelotIps ]
+        - IpProtocol: '-1'
+          FromPort: '-1'
+          ToPort: '-1'
+          CidrIp:
+            Fn::Select: [ 1, Ref: OcelotIps ]
+        - IpProtocol: '-1'
+          FromPort: '-1'
+          ToPort: '-1'
+          CidrIp:
+            Fn::Select: [ 2, Ref: OcelotIps ]
+        - IpProtocol: '-1'
+          FromPort: '-1'
+          ToPort: '-1'
+          CidrIp:
+            Fn::Select: [ 3, Ref: OcelotIps ]
+      Tags:
+        - Key: Name
+          Value:
+            Fn::Join:
+              - '-'
+              - - 
+                - 
+                - Ref: Environment
+                - airflow2-alb-sg
+        - Key: :owner
+          Value:
+            Ref: OwnerName
+        - Key: :project
+          Value:
+            Ref: ProjectName
+        - Key: :poc
+          Value:
+            Ref: POCName
+        - Key: :env
+          Value:
+            Ref: Environment
+        - Key: :regulated
+          Value:
+            Ref: Regulated
+        - Key: :data-classification
+          Value:
+            Ref: DataClassification
+  EfsSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Instance to EFS Mount Access
+      VpcId: !Ref VpcId
+      Tags:
+        - Key: Name
+          Value:
+            Fn::Join:
+              - '-'
+              - - 
+                - 
+                - Ref: Environment
+                - efs-sg
+        - Key: :owner
+          Value:
+            Ref: OwnerName
+        - Key: :project
+          Value:
+            Ref: ProjectName
+        - Key: :poc
+          Value:
+            Ref: POCName
+        - Key: :env
+          Value:
+            Ref: Environment
+        - Key: :regulated
+          Value:
+            Ref: Regulated
+        - Key: :data-classification
+          Value:
+            Ref: DataClassification
+  SecurityGroupIngress:
+    Type: AWS::EC2::SecurityGroupIngress
+    DependsOn: EfsSecurityGroup
+    Properties:
+      GroupId: !Ref EfsSecurityGroup
+      IpProtocol: "-1"
+      SourceSecurityGroupId: !GetAtt "AirflowEC2SecurityGroup.GroupId"
+  AirflowEC2TargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      HealthCheckIntervalSeconds: 30
+      HealthCheckProtocol: HTTP
+      HealthCheckTimeoutSeconds: 15
+      HealthyThresholdCount: 5
+      HealthCheckPath: /health
+      Matcher:
+        HttpCode: '200'
+      Name:
+        Fn::Join:
+          - '-'
+          - - 
+            - brd
+            - Ref: Environment
+            - airflow2-tg
+      Port: 80
+      Protocol: HTTP
+      TargetGroupAttributes:
+        - Key: deregistration_delay.timeout_seconds
+          Value: '20'
+      Targets:
+        - Id:
+            Ref: AirflowEc2Instance
+          Port: 8080
+      UnhealthyThresholdCount: 3
+      VpcId:
+        Ref: VpcId
+      Tags:
+        - Key: Name
+          Value:
+            Fn::Join:
+              - '-'
+              - - 
+                - 
+                - Ref: Environment
+                - Airflow2-Application-lb
+        - Key: :owner
+          Value:
+            Ref: OwnerName
+        - Key: :project
+          Value:
+            Ref: ProjectName
+        - Key: :poc
+          Value:
+            Ref: POCName
+        - Key: :env
+          Value:
+            Ref: Environment
+        - Key: :regulated
+          Value:
+            Ref: Regulated
+        - Key: :data-classification
+          Value:
+            Ref: DataClassification
+  Airflow2ALBListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      DefaultActions:
+        - Type: redirect
+          RedirectConfig:
+            Protocol: HTTP
+            Port: 80
+            Host: '#{host}'
+            Path: /
+            Query: '#{query}'
+            StatusCode: HTTP_301
+      LoadBalancerArn:
+        Ref: Airflow2ApplicationLoadBalancer
+      Port: 80
+      Protocol: HTTP
+  ListenerRule1:
+    Type: AWS::ElasticLoadBalancingV2::ListenerRule
+    Properties:
+      Actions:
+        - Type: forward
+          TargetGroupArn:
+            Ref: AirflowEC2TargetGroup
+      Conditions:
+        - Field: path-pattern
+          PathPatternConfig:
+            Values:
+              - /*
+      ListenerArn:
+        Ref: Airflow2ALBListener
+      Priority: '2'
+  Airflow2ALBListenerSSL:
+    Type: 'AWS::ElasticLoadBalancingV2::Listener'
+    Properties:
+      DefaultActions:
+        - RedirectConfig:
+            Host: '#{host}'
+            Path: /
+            Port: 443
+            Protocol: "HTTPS"
+            Query: "#{query}"
+            StatusCode: HTTP_301
+          Type: "redirect"
+      Certificates:
+        - CertificateArn: !Ref ALBExistingCertArn
+      LoadBalancerArn:
+        Ref: Airflow2ApplicationLoadBalancer
+      Port: 443
+      Protocol: 'HTTPS'
+  ALBListenerSSLRule1:
+    Type: AWS::ElasticLoadBalancingV2::ListenerRule
+    Properties:
+      Actions:
+        - Type: forward
+          TargetGroupArn:
+            Ref: AirflowEC2TargetGroup
+      Conditions:
+      - Field: path-pattern
+        Values:
+        - "/*"
+      ListenerArn:
+        Ref: Airflow2ALBListenerSSL
+      Priority: 1
+
+  Airflow2ApplicationLoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name:
+        Fn::Join:
+          - '-'
+          - - 
+            - brdng
+            - Ref: Environment
+            - airflow2-alb
+      Scheme: internet-facing
+      Subnets:
+        - Ref: PublicSubnetIdA
+        - Ref: PublicSubnetIdB
+      Tags:
+        - Key: Name
+          Value:
+            Fn::Join:
+              - '-'
+              - - 
+                - 
+                - Ref: Environment
+                - Airflow2-alb
+        - Key: :owner
+          Value:
+            Ref: OwnerName
+        - Key: :project
+          Value:
+            Ref: ProjectName
+        - Key: :poc
+          Value:
+            Ref: POCName
+        - Key: :env
+          Value:
+            Ref: Environment
+        - Key: :regulated
+          Value:
+            Ref: Regulated
+        - Key: :data-classification
+          Value:
+            Ref: DataClassification
+      SecurityGroups:
+        - Ref: ALBSecurityGroup
+  DBSecurityGroup:
+    Type: AWS::RDS::DBSecurityGroup
+    Properties:
+      GroupDescription: Frontend Access
+      EC2VpcId:
+        Ref: VpcId
+      DBSecurityGroupIngress:
+        EC2SecurityGroupId: !GetAtt "AirflowEC2SecurityGroup.GroupId"
+      Tags:
+        - Key: Name
+          Value:
+            Fn::Join:
+              - '-'
+              - - 
+                - 
+                - Ref: Environment
+                - Airflow2-server
+        - Key: :owner
+          Value:
+            Ref: OwnerName
+        - Key: :project
+          Value:
+            Ref: ProjectName
+        - Key: :poc
+          Value:
+            Ref: POCName
+        - Key: :env
+          Value:
+            Ref: Environment
+        - Key: :regulated
+          Value:
+            Ref: Regulated
+        - Key: :data-classification
+          Value:
+            Ref: DataClassification
+Outputs:
+  AirflowEC2PublicDNSName:
+    Description: Public DNS Name of the Airflow EC2 instance
+    Value: !Join ["", ["http://", !GetAtt "Airflow2ApplicationLoadBalancer.DNSName"]]
+  EC2InstanceID:
+    Description: The Instance ID
+    Value:
+      Ref: AirflowEc2Instance  
+  Airflow2ApplicationLoadBalancer:
+    Description: Application Load Balancer
+    Value:
+      Ref: Airflow2ApplicationLoadBalancer
+  Airflow2ApplicationLoadBalancerDNS:
+    Description: The ALB DNS Name,Hit this url to get zabbix console.
+    Value:
+      Fn::GetAtt:
+        - Airflow2ApplicationLoadBalancer
+        - DNSName
+  Airflow2ServerSecurityGroupID:
+    Description: The Zabbix Server SecurityGroup ID
+    Value:
+      Ref: AirflowEC2SecurityGroup
