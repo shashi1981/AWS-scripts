@@ -1,0 +1,697 @@
+{
+	"AWSTemplateFormatVersion": "2010-09-09",
+
+	"Description": "A highly-available, auto-scaling Sensu deployment.",
+
+	"Parameters": {
+		"CostCenterTag": {
+			"Type": "String",
+			"Description": "https://help.platforms.engineering/aws-tagging/#aws-platforms-engineering-cost-centers"
+		},
+		"ProjectTag": {
+			"Type": "String",
+			"Description": "project-name",
+			"AllowedValues": [
+				"",
+				"IT"
+			]
+		},
+		"OwnerTag": {
+			"Type": "String",
+			"Description": "forward-slash-separated (/) list of  User IDs or a velocity.ag group ID (not name).",
+			"AllowedValues": [
+				"//bdie",
+				"//bdie",
+				"/bdie"
+			]
+		},
+		"EnvironmentTag": {
+			"Type": "String",
+			"Description": "Environment - also used to form the path in vault",
+			"AllowedValues": [
+				"non-prod",
+				"prod"
+			]
+		},
+		"RegulatedTag": {
+			"Type": "String",
+			"Description": "Regulated status",
+			"AllowedValues": [
+				"no",
+				"gxp",
+				"sox"
+			]
+		},
+		"DataClassificationTag": {
+			"Type": "String",
+			"Description": "Data classification",
+			"AllowedValues": [
+				"critical",
+				"restricted",
+				"internal",
+				"public"
+			]
+		},
+		"VPCID": {
+			"Type": "AWS::EC2::VPC::Id",
+			"Description": "Select Virtual Private Cloud ID"
+		},
+
+		"VPCStackName": {
+			"Type": "String",
+			"Description": "Name of an active CloudFormation stack that contains the vpc and subnets for use in this stack.",
+			"MinLength": "1",
+			"MaxLength": "255",
+			"AllowedPattern": "^[a-zA-Z][-a-zA-Z0-9]*$"
+		},
+
+		"KeyName": {
+			"Description": "Name of and existing EC2 KeyPair to enable SSH access to the instance",
+			"Type": "AWS::EC2::KeyPair::KeyName",
+			"ConstraintDescription": "must be the name of an existing EC2 KeyPair."
+		},
+
+		"SSHLocation": {
+			"Description": "The bastion host security group (created by the ISO vpc template) that can be used to SSH to the EC2 instances",
+			"Type": "AWS::EC2::SecurityGroup::Id",
+			"ConstraintDescription": "must be a valid security group"
+		},
+
+		"InstanceType": {
+			"Description": "Server EC2 instance type",
+			"Type": "String",
+			"Default": "t2.medium",
+			"AllowedValues": [
+				"t2.nano",
+				"t2.micro",
+				"t2.small",
+				"t2.medium",
+				"t2.large",
+				"m3.medium",
+				"m3.large",
+				"m3.xlarge",
+				"m3.2xlarge",
+				"m4.large",
+				"m4.xlarge",
+				"m4.2xlarge",
+				"m4.4xlarge",
+				"m4.10xlarge",
+				"m5.large",
+				"m5.xlarge",
+				"m5.2xlarge",
+				"m5.4xlarge",
+				"m5.12xlarge",
+				"m5.24xlarge",
+				"c3.large",
+				"c3.xlarge",
+				"c3.2xlarge",
+				"c3.4xlarge",
+				"c3.8xlarge",
+				"c4.large",
+				"c4.xlarge",
+				"c4.2xlarge",
+				"c4.4xlarge",
+				"c4.8xlarge",
+				"r3.large",
+				"r3.xlarge",
+				"r3.2xlarge",
+				"r3.4xlarge",
+				"r3.8xlarge",
+				"i2.xlarge",
+				"i2.2xlarge",
+				"i2.4xlarge",
+				"i2.8xlarge",
+				"d2.xlarge",
+				"d2.2xlarge",
+				"d2.4xlarge",
+				"d2.8xlarge",
+				"hi1.4xlarge",
+				"hs1.8xlarge",
+				"cr1.8xlarge",
+				"cc2.8xlarge"
+			],
+			"ConstraintDescription": "must be a valid EC2 instance type."
+		}
+	},
+
+	"Metadata": {
+		"AWS::CloudFormation::Interface": {
+			"ParameterGroups": [{
+					"Label": "Tags",
+					"Parameters": [
+						"CostCenterTag",
+						"ProjectTag",
+						"OwnerTag",
+						"EnvironmentTag",
+						"RegulatedTag",
+						"DataClassificationTag"
+					]
+				},
+				{
+					"Label": "VPC",
+					"Parameters": [
+						"VpcStackName"
+					]
+				},
+				{
+					"Label": "Server Nodes",
+					"Parameters": [
+						"KeyName",
+						"InstanceType",
+						"SSHLocation",
+						"ServerCapacity"
+					]
+				},
+				{
+					"Label": "Security Groups",
+					"Parameters": [
+						"DBAccessSecurityGroup",
+						"RedisAccessSecurityGroup",
+						"EMRSecurityGroup"
+					]
+				}
+			]
+		}
+	},
+
+	"Mappings": {
+		"AWSRegionArch2HVM64AMI": {
+			"us-east-1": {
+				"504482810632": "ami-0f10e449038057586",
+				"422894591645": "ami-921d33e8",
+				"897621846278": "ami-a1ffeddb"
+			},
+			"us-east-2": {
+				"504482810632": "ami-4a0b3f2f",
+				"422894591645": "ami-d0e0cab5",
+				"897621846278": "ami-a32c02d9"
+			},
+			"us-west-1": {
+				"504482810632": "ami-57606937",
+				"422894591645": "ami-32e2e052",
+				"897621846278": "ami-cb656cab"
+			},
+			"us-west-2": {
+				"504482810632": "ami-df5edea7",
+				"422894591645": "ami-3c08bb44",
+				"897621846278": "ami-565ddd2e"
+			}
+		}
+	},
+	"Resources": {
+	  "ELBSecurityGroup" : {
+      "Type" : "AWS::EC2::SecurityGroup",
+      "Properties" : {
+        "GroupDescription" : "Enable HTTP and HTTPS inbound to Application Load Balancer",
+        "SecurityGroupIngress" : [
+          {"IpProtocol" : "tcp", "FromPort" : "443", "ToPort" : "443", "CidrIp" : "164.144.0.0/16" },
+          {"IpProtocol" : "tcp", "FromPort" : "443", "ToPort" : "443", "CidrIp" : "199.89.233.0/24" },
+          {"IpProtocol" : "tcp", "FromPort" : "443", "ToPort" : "443", "CidrIp" : "199.89.234.0/24" },
+          {"IpProtocol" : "tcp", "FromPort" : "80", "ToPort" : "80", "CidrIp" : "164.144.0.0/16" },
+          {"IpProtocol" : "tcp", "FromPort" : "80", "ToPort" : "80", "CidrIp" : "199.89.233.0/24" },
+          {"IpProtocol" : "tcp", "FromPort" : "80", "ToPort" : "80", "CidrIp" : "199.89.234.0/24" }
+        ],
+        "VpcId" : { "Fn::ImportValue" : { "Fn::Sub": "${VPCStackName}-VPCID" } },
+        "Tags" : [
+          { "Key" : "Name", "Value" : { "Ref" : "AWS::StackName" }},
+          { "Key" : ":cost-center", "Value" : { "Ref" : "CostCenterTag" }},
+          { "Key" : ":owner", "Value" : { "Ref" : "OwnerTag" }},
+          { "Key" : ":env", "Value" : { "Ref" : "EnvironmentTag" }},
+          { "Key" : ":project", "Value" : { "Ref" : "ProjectTag" }},
+          { "Key" : ":regulated", "Value" : { "Ref" : "RegulatedTag" }},
+          { "Key" : ":data-classification", "Value" : { "Ref" : "DataClassificationTag" }}
+        ]
+      }
+    },
+
+  "ElasticLoadBalancer" : {
+	  "Type" : "AWS::ElasticLoadBalancing::LoadBalancer",
+	  "Properties" : {
+	  "Subnets" : [
+          { "Fn::ImportValue" : { "Fn::Sub": "${VPCStackName}-PublicSubnet1" } },
+          { "Fn::ImportValue" : { "Fn::Sub": "${VPCStackName}-PublicSubnet2" } }
+        ],
+		"SecurityGroups" : [{ "Ref" : "ELBSecurityGroup" }],
+		"Scheme" : "internet-facing",
+		"Instances" : [ { "Ref" : "Ec2Instance" }],
+		"Listeners": [{
+		  "LoadBalancerPort": "80",
+		  "InstancePort": "8080",
+		  "Protocol": "HTTP"
+		}],
+		"HealthCheck": {
+		  "Target": "HTTP:80/",
+		  "HealthyThreshold": "3",
+		  "UnhealthyThreshold": "5",
+		  "Interval": "30",
+		  "Timeout": "5"
+		},
+		"ConnectionDrainingPolicy": {
+		  "Enabled" : "true",
+		  "Timeout" : "60"
+		},
+		"Tags" : [
+          { "Key" : "Name", "Value" : { "Ref" : "AWS::StackName" }},
+          { "Key" : ":cost-center", "Value" : { "Ref" : "CostCenterTag" }},
+          { "Key" : ":owner", "Value" : { "Ref" : "OwnerTag" }},
+          { "Key" : ":env", "Value" : { "Ref" : "EnvironmentTag" }},
+          { "Key" : ":project", "Value" : { "Ref" : "ProjectTag" }},
+          { "Key" : ":regulated", "Value" : { "Ref" : "RegulatedTag" }},
+          { "Key" : ":data-classification", "Value" : { "Ref" : "DataClassificationTag" }}
+        ]
+	  }
+	},
+	"Ec2Instance": {
+			"Type": "AWS::EC2::Instance",
+			"Metadata": {
+				"Comment1": "Configure the bootstrap helpers to install the Sensu-server ",
+				"Comment2": "Update config files for sensu in /etc/sensu/conf.d folder",
+				"AWS::CloudFormation::Init": {
+					"configSets": {
+						"Install": ["configure_sensu",
+							"configure_redis"
+						]
+					},
+					"configure_sensu": {
+						"files": {
+
+							"/etc/sensu/conf.d/client.json": {
+								"content": {
+									"Fn::Join": ["", [
+										"{\n",
+										"            \"client\": {\n",
+										"            \"name\": \"sensu-server\",\n",
+										"            \"address\": \"127.0.0.1\",\n",
+										"            \"environment\": \"sensu\",\n",
+										"            \"subscriptions\": [ \"linux\"],\n",
+										"            \"keepalive\":\n",
+										"            {\n",
+										"           \"handler\": \"mailer\",\n",
+										"            \"thresholds\": {\n",
+										"            \"warning\": 250,\n",
+										"            \"critical\": 300\n",
+										"          }\n",
+										"            },\n",
+										"\"socket\": {\n",
+										"          \"bind\": \"127.0.0.1\",\n",
+										"          \"port\": 3030\n",
+										"            }\n",
+										"          }\n",
+										"}\n"
+									]]
+								}
+							},
+							"/etc/sensu/config.json": {
+								"content": {
+									"Fn::Join": ["", [
+									   "{\n",
+									   "\"rabbitmq\": {\n",
+									   "\"host\": \"0.0.0.0\",\n",
+									   "\"vhost\": \"\/sensu\",\n",
+									   "\"user\": \"sensu\",\n",
+									   "\"port\": 5672,\n",
+									   "\"password\": \"Bdie_2018\"\n",
+										"}\n",
+										"}\n"
+									]]
+								}
+							},
+
+							"/etc/sensu/conf.d/transport.json": {
+								"content": {
+									"Fn::Join": ["", [
+										"{\n",
+										"\"transport\":\n",
+										"{\n",
+										"\"name\": \"rabbitmq\",\n",
+										"\"reconnect_on_error\": true\n",
+										"}\n",
+										"}\n"
+									]]
+								}
+							},
+							"/etc/sensu/conf.d/api.json": {
+								"content": {
+									"Fn::Join": ["", [
+										"{\n",
+										"\"api\":\n",
+										"{\n",
+										"\"host\": \"localhost\",\n",
+										"\"bind\": \"0.0.0.0\",\n",
+										"\"port\": 4567\n",
+										"}\n",
+										"}\n"
+									]]
+								}
+							}
+
+
+						}
+					},
+					"configure_redis": {
+						"files": {
+							"/etc/sensu/conf.d/redis.json": {
+								"content": {
+									"Fn::Join": ["", [
+										"{\n",
+										"\"redis\":\n",
+										"{\n",
+										"             \"host\": \"127.0.0.1\",\n",
+										"          \"port\": 6379\n",
+										"            }\n",
+										"           }\n"
+									]]
+								}
+							},
+							"/etc/sensu/conf.d/rabbitmq.json": {
+								"content": {
+									"Fn::Join": ["", [
+										"{\n",
+										"\"rabbitmq\":\n",
+										"{\n",
+										"             \"host\": \"127.0.0.1\",\n",
+										"          \"port\": 5672,\n",
+										"\"vhost\": \"\/sensu\",\n",
+										"\"user\": \"sensu\",\n",
+										"\"password\": \"Bdie_2018\"\n",
+										"            }\n",
+										"           }\n"
+									]]
+								}
+							},
+							"/etc/sensu/uchiwa.json": {
+								"content": {
+									"Fn::Join": ["", [
+										"{\n",
+										"      \"sensu\": [\n",
+										"            {\n",
+										"          \"name\": \"sensu\",\n",
+										"          \"host\": \"localhost\",\n",
+										"          \"port\": 4567,\n",
+										"          \"timeout\": 10\n",
+										"            }\n",
+										"          ],\n",
+										"          \"uchiwa\": {\n",
+										"            \"host\": \"0.0.0.0\",\n",
+										"            \"port\": 8080,\n",
+										"            \"refresh\": 10\n",
+										"            }\n",
+										"           }\n"
+									]]
+								}
+							},
+							"/etc/sensu/conf.d/check_cpu_linux.json": {
+								"content": {
+									"Fn::Join": ["", [
+										"{\n",
+										"\"checks\": {\n",
+										"\"check-cpu-linux\": {\n",
+										"\"handlers\": [\"mailer \"],\n",
+										"\"command\": \"/opt/sensu/embedded/bin/check-cpu.rb -w 80 -c 90\",\n",
+										"\"interval\": 60,\n",
+										"\"occurrences\": 5,\n",
+										"\"subscribers\": [ \"linux \" ]\n",
+										"}\n",
+										"}\n",
+										"}\n"
+									]]
+								}
+							},
+							"/etc/sensu/conf.d/check_memory_linux.json": {
+								"content": {
+									"Fn::Join": ["", [
+										"{\n",
+										"\"checks\": {\n",
+										"\"check_memory_linux\": {\n",
+										"\"handlers\": [\"mailer\"],\n",
+										"\"command\": \"/opt/sensu/embedded/bin/check-memory-percent.rb -w 90 -c 95\",\n",
+										"\"interval\": 60,\n",
+										"\"occurrences\": 5,\n",
+										"\"subscribers\": [ \"linux\" ]\n",
+										"}\n",
+										"}\n",
+										"}\n"
+									]]
+								}
+							},
+							"/etc/sensu/conf.d/check_disk_usage_linux.json": {
+								"content": {
+									"Fn::Join": ["", [
+										"{\n",
+										"\"checks\": {\n",
+										"\"check_disk_usage_linux\": {\n",
+										"\"handlers\": [\"mailer\"],\n",
+										"\"command\": \"/opt/sensu/embedded/bin/check-disk-usage.rb -w 80 -c 90\",\n",
+										"\"interval\": 60,\n",
+										"\"occurrences\": 5,\n",
+										"\"subscribers\": [ \"linux\" ]\n",
+										"}\n",
+										"}\n",
+										"}\n"
+									]]
+								}
+							},
+							"/etc/sensu/conf.d/handler_mail.json": {
+								"content": {
+									"Fn::Join": ["", [
+										"{\n",
+										"\"handlers\": {\n",
+										"\"mailer\": {\n",
+										"\"type\": \"pipe\",\n",
+										"\"command\": \"/opt/sensu/embedded/bin/handler-mailer.rb\"\n",
+										"}\n",
+										"}\n",
+										"}\n"
+									]]
+								}
+							},
+							"/etc/sensu/conf.d/mailer.json": {
+								"content": {
+									"Fn::Join": ["", [
+										"{\n",
+										"\"mailer\": {\n",
+										"\"admin_gui\": \"http://localhost:8080/\",\n",
+										"\"mail_from\": \"@santo.com\",\n",
+										"\"mail_to\": \"@santo.com\",\n",
+										"\"smtp_address\": \"localhost\",\n",
+										"\"smtp_port\": \"25\",\n",
+										"\"smtp_domain\": \"localhost\"\n",
+										"}\n",
+										"}\n"
+									]]
+								}
+							}
+
+						}
+					}
+
+				}
+			},
+			"Properties": {
+				"SecurityGroupIds" : [
+				{"Fn::GetAtt" : ["InstanceSecurityGroup", "GroupId"]}
+				],
+				"SubnetId": {
+					"Fn::ImportValue": {
+						"Fn::Sub": "${VPCStackName}-PrivateSubnet1"
+					}
+				},
+				"InstanceType": {
+					"Ref": "InstanceType"
+				},
+				"KeyName": {
+					"Ref": "KeyName"
+				},
+				"ImageId": {
+					"Fn::FindInMap": ["AWSRegionArch2HVM64AMI", {
+						"Ref": "AWS::Region"
+					}, {
+						"Ref": "AWS::AccountId"
+					}]
+				},
+				"UserData": {
+					"Fn::Base64": {
+						"Fn::Join": ["", [
+							"#!/bin/bash\n",
+							"apt-get update -y\n",
+							"wget -q http://sensu.global.ssl.fastly.net/apt/pubkey.gpg -O- | sudo apt-key add -\n",
+							"echo deb http://sensu.global.ssl.fastly.net/apt sensu main | sudo tee /etc/apt/sources.list.d/sensu.list\n",
+							"apt-get -y install git\n",
+							"apt-get -y install awscli\n",
+							"apt-get -y install python-pip\n",
+							"pip install https://s3.amazonaws.com/cloudformation-examples/aws-cfn-bootstrap-latest.tar.gz\n",
+							"cp /usr/local/init/ubuntu/cfn-hup /etc/init.d/cfn-hup \n",
+							"chmod +x /etc/init.d/cfn-hup \n",
+							"update-rc.d cfn-hup defaults \n ",
+							"service cfn-hup start \n",
+							"apt-get update -y\n",
+							"apt-get install apache2\n",
+							"apt-get install dpkg\n",
+							"apt-get install sensu\n",
+							"/usr/local/bin/cfn-init -v ",
+							"         --stack ", {
+								"Ref": "AWS::StackName"
+							},
+							"         --resource Ec2Instance ",
+							"         --configsets Install ",
+							" --region ", {
+								"Ref": "AWS::Region"
+							}, "\n",
+							"apt-get -y install redis-server\n",
+							"wget http://packages.erlang-solutions.com/erlang-solutions_1.0_all.deb\n",
+							"dpkg -i erlang-solutions_1.0_all.deb\n",
+							"apt-get update -y\n",
+							"apt-get -y install erlang-nox\n",
+							"wget http://www.rabbitmq.com/releases/rabbitmq-server/v3.6.0/rabbitmq-server_3.6.0-1_all.deb\n",
+							"dpkg -i rabbitmq-server_3.6.0-1_all.deb\n",
+							"service sensu-server start && service sensu-client start && service rabbitmq-server start && service redis-server start && service sensu-api start\n",
+							"rabbitmqctl add_vhost \/sensu\n",
+							"rabbitmqctl add_user sensu Bdie_2018\n",
+							"rabbitmqctl set_permissions -p \/sensu sensu \".*\" \".*\" \".*\"\n",
+							"apt-get install uchiwa\n",
+							"rm /etc/sensu/uchiwa.json.dpkg-new\n",
+							"service uchiwa start\n",
+							"cd /opt/sensu/embedded/bin/\n",
+							"sensu-install -p cpu-checks\n",
+							"sensu-install -p disk-checks\n",
+							"sensu-install -p memory-checks\n",
+							"sensu-install -p nginx\n",
+							"sensu-install -p process-checks\n",
+							"sensu-install -p load-checks\n",
+							"sensu-install -p vmstats\n",
+							"sensu-install -p mailer\n",
+							"apt-get install postfix\n",
+							"service sensu-server restart\n",
+							"service sensu-api restart\n",
+							"service sensu-client restart\n",
+							"service uchiwa restart\n",
+							"sudo update-rc.d sensu-server defaults\n",
+							"sudo update-rc.d sensu-client defaults\n",
+							"sudo update-rc.d sensu-api defaults\n",
+							"sudo update-rc.d uchiwa defaults\n"
+
+						]]
+					}
+				},
+				"Tags": [{
+						"Key": "Name",
+						"Value": {
+							"Ref": "AWS::StackName"
+						}
+					},
+					{
+						"Key": ":cost-center",
+						"Value": {
+							"Ref": "CostCenterTag"
+						}
+					},
+					{
+						"Key": ":owner",
+						"Value": {
+							"Ref": "OwnerTag"
+						}
+					},
+					{
+						"Key": ":env",
+						"Value": {
+							"Ref": "EnvironmentTag"
+						}
+					},
+					{
+						"Key": ":project",
+						"Value": {
+							"Ref": "ProjectTag"
+						}
+					},
+					{
+						"Key": ":regulated",
+						"Value": {
+							"Ref": "RegulatedTag"
+						}
+					},
+					{
+						"Key": ":data-classification",
+						"Value": {
+							"Ref": "DataClassificationTag"
+						}
+					}
+				]
+			}
+		},
+
+		"InstanceSecurityGroup": {
+			"Type": "AWS::EC2::SecurityGroup",
+			"Properties": {
+				"GroupDescription": "Enable SSH access via port 22",
+				"VpcId": {
+					"Fn::ImportValue": {
+						"Fn::Sub": "${VPCStackName}-VPCID"
+					}
+				},
+			"SecurityGroupIngress" : [
+				{"IpProtocol" : "tcp", "FromPort" : "22", "ToPort" : "22", "SourceSecurityGroupId" : { "Ref" : "SSHLocation"}},
+				{"IpProtocol" : "tcp", "FromPort" : "80", "ToPort" : "80", "SourceSecurityGroupId" : { "Ref" : "ELBSecurityGroup"}},
+				{"IpProtocol" : "tcp", "FromPort" : "80", "ToPort" : "8080", "SourceSecurityGroupId" : { "Ref" : "ELBSecurityGroup"}}
+				],
+				"Tags": [{
+						"Key": "Name",
+						"Value": {
+							"Ref": "AWS::StackName"
+						}
+					},
+					{
+						"Key": ":cost-center",
+						"Value": {
+							"Ref": "CostCenterTag"
+						}
+					},
+					{
+						"Key": ":owner",
+						"Value": {
+							"Ref": "OwnerTag"
+						}
+					},
+					{
+						"Key": ":env",
+						"Value": {
+							"Ref": "EnvironmentTag"
+						}
+					},
+					{
+						"Key": ":project",
+						"Value": {
+							"Ref": "ProjectTag"
+						}
+					},
+					{
+						"Key": ":regulated",
+						"Value": {
+							"Ref": "RegulatedTag"
+						}
+					},
+					{
+						"Key": ":data-classification",
+						"Value": {
+							"Ref": "DataClassificationTag"
+						}
+					}
+				]
+			}
+		}
+	},
+
+	"Outputs": {
+		"InstanceId": {
+			"Description": "InstanceId of the newly created EC2 instance",
+			"Value": {
+				"Ref": "Ec2Instance"
+			}
+		},
+		"AZ": {
+			"Description": "Availability Zone of the newly created EC2 instance",
+			"Value": {
+				"Fn::GetAtt": ["Ec2Instance", "AvailabilityZone"]
+			}
+		}
+	}
+}
